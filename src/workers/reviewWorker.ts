@@ -63,3 +63,4 @@ export const reviewWorker = new Worker<ReviewJobData>(
     const { chunkContent, installationId, owner, repo, pullNumber, headSha, totalChunks } = job.data;
 
     const findings = await reviewChunk(chunkContent);
+  })
