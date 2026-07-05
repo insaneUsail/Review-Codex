@@ -1,0 +1,27 @@
+{
+  "name": "prsentinel",
+  "version": "0.1.0",
+  "description": "AI-powered GitHub PR reviewer that can block merges on critical findings via Check Runs",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "bullmq": "^5.12.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "groq-sdk": "^0.7.0",
+    "ioredis": "5.10.1",
+    "js-tiktoken": "^1.0.14",
+    "octokit": "^3.1.2",
+    "parse-diff": "^0.11.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.15",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}
