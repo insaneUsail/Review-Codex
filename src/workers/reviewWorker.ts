@@ -11,14 +11,27 @@ function redisKeyPrefix(owner: string, repo: string, pullNumber: number, headSha
   return `pr-review:${owner}:${repo}:${pullNumber}:${headSha}`;
 }
 
-const REPORT_PATH = path.join(process.cwd(), "review-report.md");
+// Set PROJECTS_ROOT once in .env to the parent folder containing all your local
+// project folders, e.g. E:\DEVELOPMENT. As long as each local folder name matches
+// its GitHub repo name (CollabDraw, game, etc.), the report lands in the right
+// project automatically for any repo you install this app on — no per-project
+// config needed.
+function resolveReportPath(repo: string): string {
+  if (process.env.PROJECTS_ROOT) {
+    return path.join(process.env.PROJECTS_ROOT, repo, "review-report.md");
+  }
+  return path.join(process.cwd(), "review-report.md");
+}
 
-/**
- * Overwrites a single local report file with the latest review's findings.
- * Simpler than scrolling terminal logs — just open review-report.md after
- * every push to see the current state of the PR's review.
- */
 function writeReportFile(owner: string, repo: string, pullNumber: number, findings: ReviewFinding[]) {
+  const reportPath = resolveReportPath(repo);
+  const reportDir = path.dirname(reportPath);
+
+  if (!fs.existsSync(reportDir)) {
+    console.warn(`⚠️ Report folder not found (${reportDir}) — check PROJECTS_ROOT and repo name match. Skipping local report write.`);
+    return;
+  }
+
   const timestamp = new Date().toISOString();
   let content = `# PRSentinel Review Report\n\n`;
   content += `**Repo:** ${owner}/${repo}  \n**PR:** #${pullNumber}  \n**Generated:** ${timestamp}\n\n---\n\n`;
@@ -40,8 +53,8 @@ function writeReportFile(owner: string, repo: string, pullNumber: number, findin
     }
   }
 
-  fs.writeFileSync(REPORT_PATH, content, "utf-8");
-  console.log(`📄 Report written to ${REPORT_PATH}`);
+  fs.writeFileSync(reportPath, content, "utf-8");
+  console.log(`📄 Report written to ${reportPath}`);
 }
 
 export const reviewWorker = new Worker<ReviewJobData>(
@@ -50,70 +63,3 @@ export const reviewWorker = new Worker<ReviewJobData>(
     const { chunkContent, installationId, owner, repo, pullNumber, headSha, totalChunks } = job.data;
 
     const findings = await reviewChunk(chunkContent);
-    const keyPrefix = redisKeyPrefix(owner, repo, pullNumber, headSha);
-
-    if (findings.length > 0) {
-      await redisConnection.rpush(`${keyPrefix}:findings`, JSON.stringify(findings));
-    }
-    const completed = await redisConnection.incr(`${keyPrefix}:completed`);
-
-    if (completed === 1) {
-      await redisConnection.expire(`${keyPrefix}:completed`, 3600);
-      await redisConnection.expire(`${keyPrefix}:findings`, 3600);
-    }
-
-    if (completed < totalChunks) {
-      return;
-    }
-
-    const rawFindings = await redisConnection.lrange(`${keyPrefix}:findings`, 0, -1);
-    const allFindings: ReviewFinding[] = rawFindings.flatMap((r) => JSON.parse(r));
-
-    const octokit = await ghApp.getInstallationOctokit(installationId);
-
-    writeReportFile(owner, repo, pullNumber, allFindings);
-
-    if (allFindings.length > 0) {
-      console.log(`\n📋 Review results for PR #${pullNumber} in ${owner}/${repo}:\n`);
-      for (const f of allFindings) {
-        const icon = f.severity === "CRITICAL" ? "🔴" : f.severity === "MEDIUM" ? "🟡" : "🔵";
-        console.log(`${icon} [${f.severity}] ${f.file}:${f.line}${f.endLine && f.endLine > f.line ? `-${f.endLine}` : ""}`);
-        console.log(`   ${f.comment}\n`);
-      }
-    } else {
-      console.log(`\n✅ No issues found for PR #${pullNumber} in ${owner}/${repo}\n`);
-    }
-
-    if (allFindings.length > 0) {
-      await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
-        owner,
-        repo,
-        pull_number: pullNumber,
-        event: "COMMENT",
-        comments: allFindings.map((f) => {
-          const icon = f.severity === "CRITICAL" ? "🔴" : f.severity === "MEDIUM" ? "🟡" : "🔵";
-          return {
-            path: f.file,
-            line: f.endLine && f.endLine > f.line ? f.endLine : f.line,
-            ...(f.endLine && f.endLine > f.line ? { start_line: f.line, start_side: "RIGHT" as const } : {}),
-            side: "RIGHT" as const,
-            body: `${icon} **${f.severity}**: ${f.comment}`,
-          };
-        }),
-      });
-    }
-
-    await createCheckRun({ octokit, owner, repo, headSha, findings: allFindings });
-
-    await redisConnection.del(`${keyPrefix}:findings`, `${keyPrefix}:completed`);
-
-    console.log(
-      `✅ PR #${pullNumber} in ${owner}/${repo}: ${allFindings.length} finding(s) across ${totalChunks} chunk(s)`
-    );
-  },
-  { connection: redisConnection, concurrency: 5 }
-);
-
-reviewWorker.on("failed", (job, err) => {
-  console.error(`❌ Job ${job?.id} failed:`, err.message);
-});
